@@ -84,6 +84,15 @@ the instance from the server. Always `defer reg.Close()`.
 polls the instance directly; sending heartbeats would be wasted work
 (harmless but pointless). For `CheckNone` the caller manages status by hand.
 
+**`Registration.Tags` is best-effort.** When non-empty, `Register` first
+calls `ensureServiceTags` which GETs the parent Service, merges the
+provided tags with the existing ones, and PUTs the result. A failure here
+does NOT abort the registration — by design, an instance always wins over
+a tag-sync glitch. Description follows the same merge pattern but is only
+written when the service has none yet (we never overwrite operator-set
+descriptions). If a caller absolutely needs the service-level write to
+land before registering, they should call `PutService` themselves first.
+
 ### `Resolver` — caches + balances
 
 `NewResolver` does an initial `Discover` synchronously (so the caller knows

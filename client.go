@@ -136,12 +136,52 @@ func decodeJSON(resp *http.Response, out any) error {
 
 // --- service & instance ops ---
 
+// ListServices returns all known services. Pass an empty tag for "no filter";
+// any non-empty tag is forwarded as ?tag=<...> and limits the result to
+// services that carry that tag.
 func (c *Client) ListServices(ctx context.Context) ([]Service, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/v1/services", nil)
+	return c.ListServicesByTag(ctx, "")
+}
+
+// ListServicesByTag returns services that carry the given tag. Pass an empty
+// string to fetch every service.
+func (c *Client) ListServicesByTag(ctx context.Context, tag string) ([]Service, error) {
+	path := "/v1/services"
+	if tag != "" {
+		path += "?tag=" + url.QueryEscape(tag)
+	}
+	resp, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
 	var out []Service
+	return out, decodeJSON(resp, &out)
+}
+
+// TagCount is the {tag, service-count} row returned by ListTags.
+type TagCount struct {
+	Tag   string `json:"tag"`
+	Count int    `json:"count"`
+}
+
+// ListTags returns every distinct tag in use, with a service-count for each.
+func (c *Client) ListTags(ctx context.Context) ([]TagCount, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/v1/tags", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []TagCount
+	return out, decodeJSON(resp, &out)
+}
+
+// DiscoverByTag returns up-instances of every service that carries the tag.
+// Useful for "give me anything that exposes the 'cache' role".
+func (c *Client) DiscoverByTag(ctx context.Context, tag string) ([]Instance, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/v1/discover?tag="+url.QueryEscape(tag), nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []Instance
 	return out, decodeJSON(resp, &out)
 }
 
@@ -152,6 +192,71 @@ func (c *Client) PutService(ctx context.Context, svc Service) (*Service, error) 
 	}
 	var out Service
 	return &out, decodeJSON(resp, &out)
+}
+
+// GetService fetches one service definition.
+func (c *Client) GetService(ctx context.Context, name string) (*Service, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/v1/services/"+url.PathEscape(name), nil)
+	if err != nil {
+		return nil, err
+	}
+	var out Service
+	return &out, decodeJSON(resp, &out)
+}
+
+// ensureServiceTags merges tags (and an optional description) into the parent
+// Service. Existing tags are preserved; the function never overwrites a
+// description that the operator may have set in the UI.
+//
+// Failures here are non-fatal for Register; the caller logs and ignores.
+func (c *Client) ensureServiceTags(ctx context.Context, name string, tags []string, desc string) error {
+	current, err := c.GetService(ctx, name)
+	merged := append([]string(nil), tags...)
+	currentDesc := ""
+	if err == nil {
+		currentDesc = current.Description
+		seen := make(map[string]bool, len(merged))
+		for _, t := range merged {
+			seen[t] = true
+		}
+		// Append existing tags not already in the merge.
+		for _, t := range current.Tags {
+			if !seen[t] {
+				merged = append(merged, t)
+				seen[t] = true
+			}
+		}
+		// If the service already has the same tag set and description, skip the
+		// PUT — it would be a needless audit-log entry.
+		if sameStringSet(current.Tags, merged) && (desc == "" || currentDesc != "") {
+			return nil
+		}
+	}
+	body := map[string]any{"tags": merged}
+	if currentDesc == "" && desc != "" {
+		body["description"] = desc
+	}
+	resp, err := c.do(ctx, http.MethodPut, "/v1/services/"+url.PathEscape(name), body)
+	if err != nil {
+		return err
+	}
+	return decodeJSON(resp, nil)
+}
+
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]bool, len(a))
+	for _, s := range a {
+		seen[s] = true
+	}
+	for _, s := range b {
+		if !seen[s] {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Client) DeleteService(ctx context.Context, name string) error {
@@ -225,6 +330,16 @@ type Registration struct {
 	// instead, or CheckNone to manage status yourself.
 	CheckMode        CheckMode
 	CheckIntervalSec int // probe cadence in seconds; default 15 (only used for http/tcp modes)
+
+	// Tags are written onto the parent Service definition so that operators and
+	// other clients can filter services by tag (DiscoverByTag, ListTags).
+	// Existing tags on the service are preserved — Register only adds the ones
+	// that aren't already there. Leave empty to skip the service-level write.
+	Tags []string
+
+	// Description is set on the parent Service when non-empty AND no description
+	// is yet recorded. We never overwrite a description set elsewhere.
+	Description string
 }
 
 // Registered is the handle returned by Register. Call Close() during shutdown
@@ -263,6 +378,16 @@ func (c *Client) Register(ctx context.Context, reg Registration) (*Registered, e
 	if reg.Status == "" {
 		reg.Status = StatusUp
 	}
+
+	if len(reg.Tags) > 0 || reg.Description != "" {
+		if err := c.ensureServiceTags(ctx, reg.Service, reg.Tags, reg.Description); err != nil {
+			// Tag/description sync is best-effort; do not abort the registration.
+			// Callers that strictly require the service-level write should call
+			// PutService themselves.
+			_ = err
+		}
+	}
+
 	inst := Instance{
 		ID:               reg.ID,
 		ServiceName:      reg.Service,
