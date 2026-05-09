@@ -149,7 +149,7 @@ it by hand.
 3. If it's a watchable event type, add the constant to `types.go` and verify
    the resolver's filter logic still does the right thing.
 4. Update `README.md` if the new method belongs in the high-level pitch.
-5. Update `~/.claude/skills/discovery2-client/SKILL.md` if the integration
+5. Update `~/.claude/skills/ax-discovery2-client/SKILL.md` if the integration
    recipe changes (e.g. a new init step the consumer needs to call).
 
 ### A new resolver strategy
@@ -171,7 +171,7 @@ side-effect-free; they should mutate the `*Client` and nothing else.
 
 1. Tag with semver: `git tag v0.X.0 && git push origin v0.X.0`.
 2. Test consumers can `go get github.com/axgrid/discovery2-client@v0.X.0`.
-3. Update the version mention in the `/discovery2-client` skill if the
+3. Update the version mention in the `/ax-discovery2-client` skill if the
    skill recommends pinning a version.
 
 Don't do `replace` directives in `go.mod`; the module must be importable
