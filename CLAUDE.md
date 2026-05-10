@@ -93,6 +93,16 @@ written when the service has none yet (we never overwrite operator-set
 descriptions). If a caller absolutely needs the service-level write to
 land before registering, they should call `PutService` themselves first.
 
+**`Register` always stamps `Managed: true` on the wire payload.** The
+server uses that flag to block UI-session edits/deletes of the instance
+(only the same client coming back via the same static token can mutate
+it). Operators can still see and Check the instance in the UI, but the
+Edit and Delete buttons are hidden — preventing the case where a human
+changes a field that the client will silently overwrite on its next
+restart. There is no opt-out: if you call `Register`, the instance is
+managed. Operators wanting hand-edited instances should create them via
+the UI / `PutInstance` instead.
+
 ### `Resolver` — caches + balances
 
 `NewResolver` does an initial `Discover` synchronously (so the caller knows

@@ -397,6 +397,7 @@ func (c *Client) Register(ctx context.Context, reg Registration) (*Registered, e
 		Status:           reg.Status,
 		Metadata:         reg.Metadata,
 		TTLSeconds:       reg.TTLSeconds,
+		Managed:          true, // self-registration; server protects from UI edits
 		CheckMode:        reg.CheckMode,
 		CheckIntervalSec: reg.CheckIntervalSec,
 	}
@@ -432,6 +433,15 @@ func (r *Registered) heartbeatLoop(ctx context.Context, every time.Duration) {
 	if every < 1*time.Second {
 		every = 1 * time.Second
 	}
+	send := func() {
+		hbCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_, _ = r.c.Heartbeat(hbCtx, r.Service, r.ID, "")
+		cancel()
+	}
+	// Send one heartbeat immediately. After a wake-from-sleep or any other
+	// event that paused the ticker, the sooner the server hears from us,
+	// the sooner it lifts the instance back to "up".
+	send()
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -439,9 +449,7 @@ func (r *Registered) heartbeatLoop(ctx context.Context, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			hbCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			_, _ = r.c.Heartbeat(hbCtx, r.Service, r.ID, "")
-			cancel()
+			send()
 		}
 	}
 }

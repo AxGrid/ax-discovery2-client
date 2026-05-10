@@ -92,6 +92,12 @@ type Instance struct {
 	Metadata    map[string]string `json:"metadata,omitempty"`
 	TTLSeconds  int               `json:"ttlSeconds"`
 
+	// Managed marks an instance as self-registered by this client library.
+	// Register() always sets it to true. The server uses the flag to
+	// protect such instances from being edited or deleted via the UI —
+	// only the same client (system token) or an admin can mutate them.
+	Managed bool `json:"managed,omitempty"`
+
 	// Liveness configuration (set on registration).
 	CheckMode        CheckMode `json:"checkMode,omitempty"`
 	CheckIntervalSec int       `json:"checkIntervalSec,omitempty"`
