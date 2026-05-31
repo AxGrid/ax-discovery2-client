@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // Config is the merged, effective configuration returned by ResolveConfig:
@@ -17,12 +18,12 @@ type Config struct {
 	Version    string
 	Vars       map[string]TypedValue
 	Provenance map[string]string // key -> scope ID that provided it
+	// ETag is the aggregate hash of exactly this query's result. Compare it to a
+	// previously-seen value (or use ConfigETag) to detect changes cheaply.
+	ETag string
 }
 
-// ResolveConfig fetches the effective config for a (service, version). Optional
-// prefixes/keys restrict the result (a key is returned if it equals any key or
-// starts with any prefix). Pass version "" to skip version-block resolution.
-func (c *Client) ResolveConfig(ctx context.Context, service, version string, opts ...ResolveOption) (*Config, error) {
+func (c *Client) resolvePath(service, version string, opts []ResolveOption) string {
 	q := url.Values{}
 	if service != "" {
 		q.Set("service", service)
@@ -37,15 +38,42 @@ func (c *Client) ResolveConfig(ctx context.Context, service, version string, opt
 	if enc := q.Encode(); enc != "" {
 		path += "?" + enc
 	}
-	resp, err := c.do(ctx, http.MethodGet, path, nil)
+	return path
+}
+
+// ResolveConfig fetches the effective config for a (service, version). Optional
+// prefixes/keys restrict the result (a key is returned if it equals any key or
+// starts with any prefix). Pass version "" to skip version-block resolution.
+// With a cache backend (WithCache) this revalidates cheaply and survives
+// discovery downtime.
+func (c *Client) ResolveConfig(ctx context.Context, service, version string, opts ...ResolveOption) (*Config, error) {
+	body, etag, err := c.doGet(ctx, c.resolvePath(service, version, opts))
 	if err != nil {
 		return nil, err
 	}
 	var rc resolvedConfig
-	if err := decodeJSON(resp, &rc); err != nil {
+	if err := json.Unmarshal(body, &rc); err != nil {
 		return nil, err
 	}
-	return &Config{Service: rc.Service, Version: rc.Version, Vars: rc.Vars, Provenance: rc.Provenance}, nil
+	if etag == "" {
+		etag = rc.ETag
+	}
+	return &Config{Service: rc.Service, Version: rc.Version, Vars: rc.Vars, Provenance: rc.Provenance, ETag: etag}, nil
+}
+
+// ConfigETag returns just the aggregate ETag for a resolve query via a HEAD
+// request (no body). Poll it cheaply and only ResolveConfig when it changes
+// from the ETag you last saw.
+func (c *Client) ConfigETag(ctx context.Context, service, version string, opts ...ResolveOption) (string, error) {
+	resp, err := c.do(ctx, http.MethodHead, c.resolvePath(service, version, opts), nil)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("discovery: %s", resp.Status)
+	}
+	return strings.Trim(resp.Header.Get("ETag"), `"`), nil
 }
 
 // ResolveOption tunes a ResolveConfig query.

@@ -176,6 +176,7 @@ type resolvedConfig struct {
 	Version    string                `json:"version,omitempty"`
 	Vars       map[string]TypedValue `json:"vars"`
 	Provenance map[string]string     `json:"provenance,omitempty"`
+	ETag       string                `json:"etag,omitempty"`
 }
 
 // Event is a change notification streamed over WebSocket.

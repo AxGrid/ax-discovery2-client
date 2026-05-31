@@ -23,10 +23,15 @@ Files:
 ```
 go.mod                # module github.com/axgrid/ax-discovery2-client; go 1.23
 types.go              # Service, Instance, Interface, Status, Event + constants
-client.go             # Client, Option (WithToken/WithName/WithEndpointOrder/WithRetry/WithHTTPClient),
-                      # multi-endpoint failover (order + 5xx retry), CRUD/Discover/Heartbeat,
+client.go             # Client, Option (WithToken/WithName/WithEndpointOrder/WithRetry/
+                      # WithCache(Dir/TTL)/WithHTTPClient), multi-endpoint failover
+                      # (order + 5xx retry), do→doH, CRUD/Discover/Heartbeat,
                       # DiscoverVersion/DiscoverAddresses/Pick (semver + sticky),
                       # Register + Registered (auto-heartbeat handle), Watch
+cache.go              # CacheBackend interface, FileCache, doGet (TTL + 304 revalidate
+                      # + stale-on-failure fallback); config/discover read caching
+gormcache/            # SEPARATE nested module — GORM-backed CacheBackend (keeps
+                      # gorm out of the core module's graph)
 resolver.go           # Resolver, Strategy (RoundRobin/Random/Weighted),
                       # ResolverOption (WithVersion), Pick/PickAddress/PickURL;
                       # refreshes via Watch + 30s poll
@@ -86,6 +91,16 @@ library's own calls are safe to repeat (reads are GET, registration is an
 idempotent PUT). Callers needing stricter semantics pass `WithRetry(fn)` (e.g.
 network-only, or skip POST). When every endpoint returns 5xx, `do` surfaces the
 last response so `decodeJSON` turns it into the server's error.
+
+**Caching + change-detection (`cache.go`).** Read calls (config resolve,
+discover) carry a server-computed **ETag** — a query-scoped hash (only the keys
+/ instances *your* request returned). Big `bytes`/`json` values are hashed once
+on write, so it's cheap regardless of size. `ConfigETag` is a HEAD (no body)
+for "did it change?". `WithCache`/`WithCacheDir` enable an on-disk-or-pluggable
+cache: serve fresh within TTL, else conditional GET (304), else **serve stale
+when discovery is down** — so a service boots on its last-known config/pool.
+`CacheBackend` is `Get/Set([]byte)` only (no parent import needed), so the
+`gormcache` backend lives in its own module and keeps gorm out of the core graph.
 
 `Register` is the high-level flow: PUT the instance, then conditionally start
 a goroutine that calls `Heartbeat` at TTL/3 cadence. Returns a `*Registered`

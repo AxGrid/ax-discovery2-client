@@ -76,7 +76,58 @@ Options:
 - `WithName(name string)` — identifies this client (`X-Discovery-Client` header); shows up in the server dashboard's request feed and client map.
 - `WithEndpointOrder(order)` — `OrderSequential` (default, always tries the first URL first) or `OrderRandom` (random start each request, wraps around — spreads load across nodes). Failover to the rest happens either way.
 - `WithRetry(fn)` — override the failover predicate `func(method string, status int, err error) bool`. Default fails over on any transport error or 5xx. Use it to, e.g., only retry idempotent methods.
+- `WithCache(backend)` / `WithCacheDir(dir)` — cache read calls (config resolve + discover). Serves fresh-enough entries without a round-trip, revalidates with `If-None-Match` (304 = cheap), and **falls back to the last-known value when every discovery node is down** — so a service can start on its cached config/pool. `WithCacheDir` uses the filesystem; `WithCache` takes any `CacheBackend` (see below).
+- `WithCacheTTL(d)` — how long a cached read is served before revalidation (default 30s).
 - `WithHTTPClient(*http.Client)` — override timeouts / transport.
+
+### Change detection & caching (ETag)
+
+Reads carry a query-scoped `ETag` — a hash of *exactly* the keys/instances your
+request returned. Use it to detect changes cheaply without refetching bodies:
+
+```go
+cfg, _ := d.ResolveConfig(ctx, "billing", "2.1.0", discovery.WithPrefixes("db/"))
+prev := cfg.ETag
+
+// later — HEAD only, no body:
+etag, _ := d.ConfigETag(ctx, "billing", "2.1.0", discovery.WithPrefixes("db/"))
+if etag != prev { /* something under db/ changed — re-resolve */ }
+```
+
+Large `bytes`/`json` values are hashed once on the server at write time, so this
+stays cheap regardless of value size. With `WithCache*`, the client does this
+revalidation for you (conditional GET → 304) and survives discovery downtime.
+
+#### Cache backends
+
+`WithCacheDir(dir)` is a filesystem cache. To store the cache elsewhere (a DB,
+Redis, …) implement the tiny `CacheBackend` interface:
+
+```go
+type CacheBackend interface {
+    Get(key string) (data []byte, ok bool)
+    Set(key string, data []byte)
+}
+```
+
+A ready GORM-backed backend ships as a separate module (so GORM isn't a
+dependency unless you use it):
+
+```go
+import (
+    "github.com/glebarez/sqlite"
+    "gorm.io/gorm"
+    "github.com/axgrid/ax-discovery2-client/gormcache"
+)
+
+db, _ := gorm.Open(sqlite.Open("cache.db"), &gorm.Config{})
+cache, _ := gormcache.New(db)            // any GORM dialect works
+d := discovery.New(url, discovery.WithCache(cache))
+```
+
+```sh
+go get github.com/axgrid/ax-discovery2-client/gormcache
+```
 
 ```go
 // Three nodes, random pick + failover (incl. 5xx):

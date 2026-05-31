@@ -420,6 +420,14 @@ errors **and 5xx** is on by default. Add `WithEndpointOrder(discovery.OrderRando
 to spread load (random start each request) instead of always hitting the first.
 Use `WithRetry(fn)` only if the app needs stricter failover (e.g. network-only).
 
+**Offline-tolerant reads (optional).** If the app must keep running when discovery
+is briefly down, add `WithCacheDir("/var/cache/<app>/discovery")` (or
+`WithCache(backend)` for a DB — e.g. the `gormcache` submodule). Read calls
+(config resolve, discover) then serve fresh within the TTL, revalidate cheaply
+(ETag → 304), and **fall back to the last-known value when every node is down**,
+so the service can boot on its cached config/pool. To detect config changes
+without refetching, poll `d.ConfigETag(...)` (a HEAD) and compare.
+
 ---
 
 ## Step 5 — verify

@@ -44,6 +44,8 @@ type Client struct {
 	name      string
 	order     EndpointOrder
 	retry     RetryFunc
+	cache     CacheBackend
+	cacheTTL  time.Duration
 	hc        *http.Client
 }
 
@@ -109,6 +111,25 @@ func WithName(name string) Option { return func(c *Client) { c.name = name } }
 // WithHTTPClient overrides the underlying http.Client (timeouts, transport, etc).
 func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.hc = h } }
 
+// WithCache enables caching of read calls (config resolve and discover) using
+// the given backend. Successful responses are:
+//   - served directly while younger than the cache TTL (no network round-trip),
+//   - otherwise revalidated with a conditional request (304 = cheap refresh),
+//   - and served stale as a fallback when every discovery node is unreachable
+//     or unhealthy (so a service can start on its last-known config/pool even
+//     if discovery is down).
+//
+// Pass NewFileCache(dir) for a filesystem cache, or any CacheBackend (e.g. the
+// gorm-backed one in the gormcache subpackage, or your own DB adapter).
+func WithCache(b CacheBackend) Option { return func(c *Client) { c.cache = b } }
+
+// WithCacheDir is sugar for WithCache(NewFileCache(dir)).
+func WithCacheDir(dir string) Option { return WithCache(NewFileCache(dir)) }
+
+// WithCacheTTL sets how long a cached read is served without revalidation
+// (default 30s). Only meaningful together with WithCache / WithCacheDir.
+func WithCacheTTL(ttl time.Duration) Option { return func(c *Client) { c.cacheTTL = ttl } }
+
 // New constructs a Client. baseURLs may be a single URL or a comma-separated
 // list of URLs to several discovery nodes. On a transport error or a 5xx
 // response the Client transparently fails over to the next endpoint (tune via
@@ -153,10 +174,16 @@ func (c *Client) endpointIndices() []int {
 	return idx
 }
 
-// do tries each endpoint (per the configured order) until one returns a
-// response the retry predicate accepts. Failover happens on transport errors
-// and, by default, on 5xx responses (see defaultRetry / WithRetry).
+// do is doH with no extra headers.
 func (c *Client) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
+	return c.doH(ctx, method, path, body, nil)
+}
+
+// doH tries each endpoint (per the configured order) until one returns a
+// response the retry predicate accepts. Failover happens on transport errors
+// and, by default, on 5xx responses (see defaultRetry / WithRetry). extra
+// carries per-call headers (e.g. If-None-Match for conditional reads).
+func (c *Client) doH(ctx context.Context, method, path string, body any, extra http.Header) (*http.Response, error) {
 	var raw []byte
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -189,6 +216,11 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 		}
 		if raw != nil {
 			req.Header.Set("Content-Type", "application/json")
+		}
+		for k, vs := range extra {
+			for _, v := range vs {
+				req.Header.Add(k, v)
+			}
 		}
 		resp, err := c.hc.Do(req)
 		if err != nil {
@@ -393,12 +425,12 @@ func (c *Client) DiscoverVersion(ctx context.Context, service, constraint string
 	if constraint != "" {
 		path += "?version=" + url.QueryEscape(constraint)
 	}
-	resp, err := c.do(ctx, http.MethodGet, path, nil)
+	body, _, err := c.doGet(ctx, path)
 	if err != nil {
 		return nil, err
 	}
 	var out []Instance
-	return out, decodeJSON(resp, &out)
+	return out, json.Unmarshal(body, &out)
 }
 
 // DiscoverAddresses returns a flat ["host:port", …] list of the matching "up"
@@ -412,12 +444,12 @@ func (c *Client) DiscoverAddresses(ctx context.Context, service, constraint, ifa
 	if iface != "" {
 		q.Set("iface", iface)
 	}
-	resp, err := c.do(ctx, http.MethodGet, "/v1/discover/"+url.PathEscape(service)+"?"+q.Encode(), nil)
+	body, _, err := c.doGet(ctx, "/v1/discover/"+url.PathEscape(service)+"?"+q.Encode())
 	if err != nil {
 		return nil, err
 	}
 	var out []string
-	return out, decodeJSON(resp, &out)
+	return out, json.Unmarshal(body, &out)
 }
 
 // PickOptions tune a single server-side instance selection.
