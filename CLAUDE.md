@@ -23,7 +23,8 @@ Files:
 ```
 go.mod                # module github.com/axgrid/ax-discovery2-client; go 1.23
 types.go              # Service, Instance, Interface, Status, Event + constants
-client.go             # Client, Option (WithToken/WithName/WithHTTPClient), CRUD/Discover/Heartbeat,
+client.go             # Client, Option (WithToken/WithName/WithEndpointOrder/WithRetry/WithHTTPClient),
+                      # multi-endpoint failover (order + 5xx retry), CRUD/Discover/Heartbeat,
                       # DiscoverVersion/DiscoverAddresses/Pick (semver + sticky),
                       # Register + Registered (auto-heartbeat handle), Watch
 resolver.go           # Resolver, Strategy (RoundRobin/Random/Weighted),
@@ -76,10 +77,15 @@ When the server's wire format changes:
 
 ### `Client` — raw + helpers
 
-`Client.do` is the one-shot HTTP path with multi-endpoint failover (try each
-`baseURL` in order until one returns a non-network error). It does *not*
-retry on HTTP 5xx; that's a deliberate choice because retries on 5xx without
-idempotency keys can double-write.
+`Client.do` is the one-shot HTTP path with multi-endpoint failover. It walks the
+endpoints in the configured order (`WithEndpointOrder`: `OrderSequential`
+default, or `OrderRandom` = random start + wrap) and fails over to the next on a
+transport error **or a 5xx response** (the default `RetryFunc`). 5xx is retried
+because a proxied node commonly returns 502/503/504 while down — and this
+library's own calls are safe to repeat (reads are GET, registration is an
+idempotent PUT). Callers needing stricter semantics pass `WithRetry(fn)` (e.g.
+network-only, or skip POST). When every endpoint returns 5xx, `do` surfaces the
+last response so `decodeJSON` turns it into the server's error.
 
 `Register` is the high-level flow: PUT the instance, then conditionally start
 a goroutine that calls `Heartbeat` at TTL/3 cadence. Returns a `*Registered`

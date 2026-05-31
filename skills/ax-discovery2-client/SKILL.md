@@ -401,7 +401,7 @@ convention):
 
 | Env | Default | Meaning |
 |---|---|---|
-| `DISCOVERY_URL` | `http://localhost:8500` | One URL or comma-separated list of discovery2 nodes |
+| `DISCOVERY_URL` | `http://localhost:8500` | One URL or **comma-separated list** of discovery2 nodes; the client fails over to the next on a transport error or 5xx |
 | `DISCOVERY_TOKEN` | (empty) | Bearer token; required if the server has write tokens configured. UI-minted client tokens (`dsc_…`) or static env tokens both work |
 | `SERVICE_NAME` | repo / cmd name | logical service this app registers as (also the dashboard client name via `WithName`) |
 | `SERVICE_ADDR` | `127.0.0.1` | host or IP peers will use to reach this instance |
@@ -413,6 +413,12 @@ there instead of reading raw env vars.
 
 If the project has `.env.example`, also append the new variables there
 with a one-line comment per variable.
+
+**Highly-available discovery.** When the user runs more than one discovery node,
+pass them all to `New` (comma-separated `DISCOVERY_URL`). Failover on transport
+errors **and 5xx** is on by default. Add `WithEndpointOrder(discovery.OrderRandom)`
+to spread load (random start each request) instead of always hitting the first.
+Use `WithRetry(fn)` only if the app needs stricter failover (e.g. network-only).
 
 ---
 

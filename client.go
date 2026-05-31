@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strings"
@@ -41,7 +42,37 @@ type Client struct {
 	endpoints []string
 	token     string
 	name      string
+	order     EndpointOrder
+	retry     RetryFunc
 	hc        *http.Client
+}
+
+// EndpointOrder controls which of several configured discovery URLs the Client
+// tries first on each request. Failover to the remaining endpoints happens
+// regardless of order.
+type EndpointOrder int
+
+const (
+	// OrderSequential always tries endpoints in the order given (first URL
+	// first). This is the default.
+	OrderSequential EndpointOrder = iota
+	// OrderRandom starts at a random endpoint each request and wraps around —
+	// spreads load across nodes while still failing over to the rest.
+	OrderRandom
+)
+
+// RetryFunc decides whether a request should fail over to the next endpoint.
+// It gets the HTTP method, the response status (0 on a transport error), and
+// the transport error (nil when there was an HTTP response).
+type RetryFunc func(method string, status int, err error) bool
+
+// defaultRetry fails over on any transport error or 5xx response. 5xx is
+// included because a node behind a proxy commonly returns 502/503/504 when it's
+// down or restarting — the request wasn't processed, so the next node is the
+// right move. Safe for this library's calls: reads are GET and registration is
+// an idempotent PUT. Override with WithRetry if you need stricter semantics.
+func defaultRetry(_ string, status int, err error) bool {
+	return err != nil || status >= 500
 }
 
 // Option configures a Client at construction time.
@@ -49,6 +80,25 @@ type Option func(*Client)
 
 // WithToken sets the bearer token sent on every request.
 func WithToken(t string) Option { return func(c *Client) { c.token = t } }
+
+// WithEndpointOrder sets how the Client picks the first endpoint to try among
+// the configured discovery URLs (sequential by default, or random).
+func WithEndpointOrder(o EndpointOrder) Option { return func(c *Client) { c.order = o } }
+
+// WithRetry overrides the failover predicate (default: transport error or 5xx).
+// Example — only retry idempotent methods:
+//
+//	WithRetry(func(method string, status int, err error) bool {
+//	    if method == http.MethodPost { return err != nil }
+//	    return err != nil || status >= 500
+//	})
+func WithRetry(fn RetryFunc) Option {
+	return func(c *Client) {
+		if fn != nil {
+			c.retry = fn
+		}
+	}
+}
 
 // WithName identifies this client to the discovery server. The name is sent as
 // the X-Discovery-Client header on every request and surfaces in the server's
@@ -60,11 +110,13 @@ func WithName(name string) Option { return func(c *Client) { c.name = name } }
 func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.hc = h } }
 
 // New constructs a Client. baseURLs may be a single URL or a comma-separated
-// list of URLs to several discovery nodes; on a network error the Client
-// transparently retries the next endpoint.
+// list of URLs to several discovery nodes. On a transport error or a 5xx
+// response the Client transparently fails over to the next endpoint (tune via
+// WithEndpointOrder / WithRetry).
 func New(baseURLs string, opts ...Option) *Client {
 	c := &Client{
 		endpoints: splitURLs(baseURLs),
+		retry:     defaultRetry,
 		hc:        &http.Client{Timeout: 10 * time.Second},
 	}
 	for _, opt := range opts {
@@ -85,7 +137,25 @@ func splitURLs(s string) []string {
 	return out
 }
 
-// do tries each endpoint in order until one returns a non-network error.
+// endpointIndices returns the order in which to try endpoints for one request.
+// Sequential keeps the configured order; Random starts at a random endpoint and
+// wraps around so all are still tried.
+func (c *Client) endpointIndices() []int {
+	n := len(c.endpoints)
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	if c.order == OrderRandom && n > 1 {
+		start := rand.Intn(n)
+		idx = append(idx[start:], idx[:start]...)
+	}
+	return idx
+}
+
+// do tries each endpoint (per the configured order) until one returns a
+// response the retry predicate accepts. Failover happens on transport errors
+// and, by default, on 5xx responses (see defaultRetry / WithRetry).
 func (c *Client) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	var raw []byte
 	if body != nil {
@@ -95,8 +165,14 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 		}
 		raw = b
 	}
+	retry := c.retry
+	if retry == nil {
+		retry = defaultRetry
+	}
 	var lastErr error
-	for _, ep := range c.endpoints {
+	var lastResp *http.Response // most recent retryable 5xx, surfaced if all fail
+	for _, i := range c.endpointIndices() {
+		ep := c.endpoints[i]
 		var rdr io.Reader
 		if raw != nil {
 			rdr = bytes.NewReader(raw)
@@ -117,9 +193,26 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 		resp, err := c.hc.Do(req)
 		if err != nil {
 			lastErr = err
+			if retry(method, 0, err) {
+				continue
+			}
+			return nil, err
+		}
+		if resp.StatusCode >= 500 && retry(method, resp.StatusCode, nil) {
+			if lastResp != nil {
+				lastResp.Body.Close()
+			}
+			lastResp = resp // keep body intact in case every endpoint fails
+			lastErr = nil
 			continue
 		}
+		if lastResp != nil {
+			lastResp.Body.Close()
+		}
 		return resp, nil
+	}
+	if lastResp != nil {
+		return lastResp, nil // all endpoints 5xx — let the caller decode the error body
 	}
 	if lastErr == nil {
 		lastErr = errors.New("no discovery endpoints configured")
@@ -570,32 +663,37 @@ func (c *Client) Watch(ctx context.Context) (<-chan Event, error) {
 	if len(c.endpoints) == 0 {
 		return nil, errors.New("no endpoints")
 	}
-	ep := c.endpoints[0]
-	wsURL := strings.Replace(ep, "http://", "ws://", 1)
-	wsURL = strings.Replace(wsURL, "https://", "wss://", 1) + "/v1/watch"
 	hdr := http.Header{}
 	if c.token != "" {
 		hdr.Set("Authorization", "Bearer "+c.token)
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, hdr)
-	if err != nil {
-		return nil, err
-	}
-	out := make(chan Event, 32)
-	go func() {
-		defer close(out)
-		defer conn.Close()
-		for {
-			var ev Event
-			if err := conn.ReadJSON(&ev); err != nil {
-				return
-			}
-			select {
-			case out <- ev:
-			case <-ctx.Done():
-				return
-			}
+	// Try endpoints in the configured order; fail over to the next on a dial error.
+	var lastErr error
+	for _, i := range c.endpointIndices() {
+		wsURL := strings.Replace(c.endpoints[i], "http://", "ws://", 1)
+		wsURL = strings.Replace(wsURL, "https://", "wss://", 1) + "/v1/watch"
+		conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, hdr)
+		if err != nil {
+			lastErr = err
+			continue
 		}
-	}()
-	return out, nil
+		out := make(chan Event, 32)
+		go func() {
+			defer close(out)
+			defer conn.Close()
+			for {
+				var ev Event
+				if err := conn.ReadJSON(&ev); err != nil {
+					return
+				}
+				select {
+				case out <- ev:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+		return out, nil
+	}
+	return nil, lastErr
 }

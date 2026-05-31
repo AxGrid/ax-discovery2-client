@@ -66,13 +66,25 @@ pick, _ := d.Pick(ctx, "payments", discovery.PickOptions{
 d := discovery.New(baseURLs string, opts ...Option)
 ```
 
-`baseURLs` is a single URL or comma-separated list. On a network error, the client transparently retries the next endpoint.
+`baseURLs` is a single URL or comma-separated list of discovery nodes. On a
+transport error **or a 5xx response** the client transparently fails over to the
+next endpoint (a node behind a proxy often returns 502/503/504 when it's down).
 
 Options:
 
 - `WithToken(t string)` — bearer token sent on every request.
 - `WithName(name string)` — identifies this client (`X-Discovery-Client` header); shows up in the server dashboard's request feed and client map.
+- `WithEndpointOrder(order)` — `OrderSequential` (default, always tries the first URL first) or `OrderRandom` (random start each request, wraps around — spreads load across nodes). Failover to the rest happens either way.
+- `WithRetry(fn)` — override the failover predicate `func(method string, status int, err error) bool`. Default fails over on any transport error or 5xx. Use it to, e.g., only retry idempotent methods.
 - `WithHTTPClient(*http.Client)` — override timeouts / transport.
+
+```go
+// Three nodes, random pick + failover (incl. 5xx):
+d := discovery.New("http://d1:8500,http://d2:8500,http://d3:8500",
+    discovery.WithEndpointOrder(discovery.OrderRandom))
+```
+
+`Watch` (and the `Resolver`'s live updates) also fails over across endpoints on a dial error.
 
 ### Self-registration
 
