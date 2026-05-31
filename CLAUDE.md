@@ -51,6 +51,9 @@ Currently mirrored:
 - `Service`, `Interface`, `Instance` — main resources. `Instance.Version`
   (semver, registrable) and `Instance.Blocked` (operator kill-switch,
   read-only here) are part of the contract.
+- `TypedValue`, `ConfigScope`, `ConfigRevision` — config store (see `config.go`:
+  `ResolveConfig`/`reg.Config` for reads, `SetServiceConfig`/`SetVersionConfig`/
+  `SetGlobalConfig`/`ApplyConfig` for writes, `StringVar`/`IntVar`/… builders).
 - `Status`, `Visibility`, `CheckMode` — enum-ish string types
 - `ProbeResult`, `InstanceCheck` — per-interface health probe report
 - `Event` — WebSocket change notification

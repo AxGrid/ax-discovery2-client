@@ -439,9 +439,21 @@ type Registration struct {
 type Registered struct {
 	Service string
 	ID      string
+	Version string
 	c       *Client
 	cancel  context.CancelFunc
 	done    chan struct{}
+}
+
+// Config fetches this instance's effective configuration (global < service <
+// version, resolved for the instance's own service + version). Optional
+// prefixes restrict the keys returned.
+func (r *Registered) Config(ctx context.Context, prefixes ...string) (*Config, error) {
+	var opts []ResolveOption
+	if len(prefixes) > 0 {
+		opts = append(opts, WithPrefixes(prefixes...))
+	}
+	return r.c.ResolveConfig(ctx, r.Service, r.Version, opts...)
 }
 
 // Close deregisters the instance and stops the heartbeat goroutine.
@@ -507,6 +519,7 @@ func (c *Client) Register(ctx context.Context, reg Registration) (*Registered, e
 	r := &Registered{
 		Service: reg.Service,
 		ID:      reg.ID,
+		Version: reg.Version,
 		c:       c,
 		cancel:  cancel,
 		done:    make(chan struct{}),

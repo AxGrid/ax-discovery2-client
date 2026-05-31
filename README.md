@@ -131,6 +131,36 @@ d.Pick(ctx, "billing", discovery.PickOptions{Version: "^2.1.0", Iface: "WEB", To
 
 Instances with an empty or non-semver `Version` are excluded when a constraint is supplied.
 
+### Config store
+
+Read merged config (`global < service < version`) and write blocks:
+
+```go
+// Read this instance's effective config (uses reg.Service + reg.Version).
+cfg, _ := reg.Config(ctx)               // or reg.Config(ctx, "db/") to filter by prefix
+host, _ := cfg.String("db/host")
+port, _ := cfg.Int("db/port")
+on,   _ := cfg.Bool("feature/x")
+var policy MyPolicy
+_ = cfg.JSON("policy", &policy)
+
+// Or resolve for an arbitrary service/version:
+cfg, _ = d.ResolveConfig(ctx, "billing", "2.1.0", discovery.WithPrefixes("db/"))
+
+// Write a block (atomic; creates a new revision). Needs write access to the
+// scope (global → admin).
+d.SetServiceConfig(ctx, "billing", map[string]discovery.TypedValue{
+    "db/host": discovery.StringVar("db1"),
+    "db/port": discovery.IntVar(5432),
+    "feature/x": discovery.BoolVar(true),
+}, "init")
+d.SetVersionConfig(ctx, "billing", ">=2.1.0", map[string]discovery.TypedValue{
+    "db/host": discovery.StringVar("db-fast"),
+}, "fast pool for 2.1+")
+```
+
+Typed value builders: `StringVar`, `IntVar`, `FloatVar`, `BoolVar`, `BytesVar`, `JSONVar`.
+
 ### Lower-level operations
 
 For UI tools or admin scripts you can call the raw API:

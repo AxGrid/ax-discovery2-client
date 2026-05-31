@@ -1,6 +1,9 @@
 package discovery
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Status of a registered instance.
 type Status string
@@ -120,6 +123,59 @@ type Instance struct {
 	LastHeartbeat time.Time `json:"lastHeartbeat"`
 	RegisteredAt  time.Time `json:"registeredAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
+// VarType tags the concrete type of a config value. Mirrors model.VarType.
+type VarType string
+
+const (
+	VarString VarType = "string"
+	VarInt    VarType = "int"
+	VarFloat  VarType = "float"
+	VarBool   VarType = "bool"
+	VarJSON   VarType = "json"
+	VarBytes  VarType = "bytes" // base64 string on the wire
+)
+
+// TypedValue is one config value: its type plus the raw JSON encoding (a base64
+// string for bytes).
+type TypedValue struct {
+	Type  VarType         `json:"type"`
+	Value json.RawMessage `json:"value"`
+}
+
+// Config scope kinds.
+const (
+	ScopeGlobal  = "global"
+	ScopeService = "service"
+	ScopeVersion = "version"
+)
+
+// ConfigScope identifies a config container: the global tree, a service's
+// config, or a version-constrained block within a service.
+type ConfigScope struct {
+	Kind       string `json:"kind"`                 // global | service | version
+	Service    string `json:"service,omitempty"`    // service / version scopes
+	Constraint string `json:"constraint,omitempty"` // version scope only, e.g. ">=2.1.0"
+}
+
+// ConfigRevision is one published snapshot of a scope's variables.
+type ConfigRevision struct {
+	Scope     ConfigScope           `json:"scope"`
+	Revision  int                   `json:"revision"`
+	Vars      map[string]TypedValue `json:"vars"`
+	Note      string                `json:"note,omitempty"`
+	Author    string                `json:"author,omitempty"`
+	CreatedAt time.Time             `json:"createdAt"`
+	UpdatedAt time.Time             `json:"updatedAt"`
+}
+
+// resolvedConfig is the wire shape of GET /v1/config/resolve.
+type resolvedConfig struct {
+	Service    string                `json:"service"`
+	Version    string                `json:"version,omitempty"`
+	Vars       map[string]TypedValue `json:"vars"`
+	Provenance map[string]string     `json:"provenance,omitempty"`
 }
 
 // Event is a change notification streamed over WebSocket.
