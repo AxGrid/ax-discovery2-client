@@ -83,20 +83,31 @@ type InstanceCheck struct {
 
 // Instance is a single running process registered for a Service.
 type Instance struct {
-	ID          string            `json:"id"`
-	ServiceName string            `json:"service"`
-	Address     string            `json:"address"`
-	Interfaces  []Interface       `json:"interfaces"`
-	Weight      int               `json:"weight"`
-	Status      Status            `json:"status"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
-	TTLSeconds  int               `json:"ttlSeconds"`
+	ID          string `json:"id"`
+	ServiceName string `json:"service"`
+	Address     string `json:"address"`
+
+	// Version is the released version this instance runs, e.g. "2.1.0".
+	// Semver-comparable values let callers filter with constraint queries
+	// (DiscoverVersion, Pick with PickOptions.Version, e.g. ">=2.1.0").
+	Version string `json:"version,omitempty"`
+
+	Interfaces []Interface       `json:"interfaces"`
+	Weight     int               `json:"weight"`
+	Status     Status            `json:"status"`
+	Metadata   map[string]string `json:"metadata,omitempty"`
+	TTLSeconds int               `json:"ttlSeconds"`
 
 	// Managed marks an instance as self-registered by this client library.
 	// Register() always sets it to true. The server uses the flag to
 	// protect such instances from being edited or deleted via the UI —
 	// only the same client (system token) or an admin can mutate them.
 	Managed bool `json:"managed,omitempty"`
+
+	// Blocked is set when an operator has taken the instance out of rotation
+	// via the UI/API. Blocked instances never appear in Discover/Pick results,
+	// so clients rarely observe it; it's mirrored here for ListInstances.
+	Blocked bool `json:"blocked,omitempty"`
 
 	// Liveness configuration (set on registration).
 	CheckMode        CheckMode `json:"checkMode,omitempty"`

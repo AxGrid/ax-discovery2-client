@@ -23,10 +23,12 @@ Files:
 ```
 go.mod                # module github.com/axgrid/discovery2-client; go 1.23
 types.go              # Service, Instance, Interface, Status, Event + constants
-client.go             # Client, Option (WithToken/WithHTTPClient), CRUD/Discover/Heartbeat,
+client.go             # Client, Option (WithToken/WithName/WithHTTPClient), CRUD/Discover/Heartbeat,
+                      # DiscoverVersion/DiscoverAddresses/Pick (semver + sticky),
                       # Register + Registered (auto-heartbeat handle), Watch
 resolver.go           # Resolver, Strategy (RoundRobin/Random/Weighted),
-                      # Pick/PickAddress/PickURL; refreshes via Watch + 30s poll
+                      # ResolverOption (WithVersion), Pick/PickAddress/PickURL;
+                      # refreshes via Watch + 30s poll
 README.md             # public docs
 example/main.go       # runnable demo: registers self, optionally calls a peer
 ```
@@ -46,7 +48,9 @@ contract is the wire format.
 
 Currently mirrored:
 
-- `Service`, `Interface`, `Instance` — main resources
+- `Service`, `Interface`, `Instance` — main resources. `Instance.Version`
+  (semver, registrable) and `Instance.Blocked` (operator kill-switch,
+  read-only here) are part of the contract.
 - `Status`, `Visibility`, `CheckMode` — enum-ish string types
 - `ProbeResult`, `InstanceCheck` — per-interface health probe report
 - `Event` — WebSocket change notification
@@ -77,7 +81,24 @@ idempotency keys can double-write.
 `Register` is the high-level flow: PUT the instance, then conditionally start
 a goroutine that calls `Heartbeat` at TTL/3 cadence. Returns a `*Registered`
 whose `Close` both stops the heartbeat goroutine (if running) AND deletes
-the instance from the server. Always `defer reg.Close()`.
+the instance from the server. Always `defer reg.Close()`. Set
+`Registration.Version` (semver) so other callers can filter by it.
+
+**`WithName(name)` is recommended.** It sends `X-Discovery-Client: <name>` on
+every request; the server's dashboard groups its request feed and client map
+by that name (otherwise it falls back to the caller's IP). Use your service
+name, optionally suffixed with an instance id.
+
+**Version-aware discovery.** `DiscoverVersion(service, constraint)` and
+`DiscoverAddresses(service, constraint, iface)` apply an npm-style semver
+filter server-side (`>=2.1.0`, `^2.1`, `~2.1.0`, `1.x`, `1.2.0 - 1.3.5`).
+Instances with an empty/non-semver `Version` are excluded under a constraint.
+
+**`Pick(service, PickOptions)` is server-side selection.** Use it instead of a
+long-lived `Resolver` when you want sticky balancing: pass `PickOptions.Token`
+and repeated picks land on the same instance until it idles past the server's
+affinity TTL; if that instance dies the server re-binds and sets
+`PickResult.Rebound`. `PickOptions.Version`/`Iface` mirror the discover params.
 
 **The heartbeat goroutine runs only when `Registration.CheckMode` is
 `CheckHeartbeat` (or empty).** For `CheckHTTP` / `CheckTCP` the server
@@ -117,6 +138,12 @@ that:
 `PickURL(iface)` are sugar for the two call patterns we expect (gRPC dial
 target vs HTTP base URL). `Instances()` returns a snapshot if the caller
 wants to balance manually.
+
+Pass `WithVersion(constraint)` to `NewResolver` to restrict the cache to
+instances satisfying a semver constraint; the filter is re-applied on every
+refresh, so a rolling deploy is reflected live. The option is variadic and
+backward-compatible — existing `NewResolver(ctx, svc, strategy)` calls are
+unaffected.
 
 Don't cache the result of `PickAddress` past one request — instances change
 under you.

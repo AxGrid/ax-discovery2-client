@@ -28,11 +28,15 @@ func main() {
 		name         = flag.String("name", "demo", "this service name")
 		addr         = flag.String("addr", "127.0.0.1", "this instance address")
 		port         = flag.Int("port", 8080, "this instance port")
+		version      = flag.String("version", "1.0.0", "this instance's released version (semver)")
 		peer         = flag.String("peer", "", "optional peer service to call")
+		peerVer      = flag.String("peer-version", "", "optional semver constraint for the peer, e.g. >=2.1.0")
 	)
 	flag.Parse()
 
-	d := discovery.New(*discoveryURL, discovery.WithToken(*token))
+	// WithName makes this client show up by name in the server dashboard's
+	// request feed and client map.
+	d := discovery.New(*discoveryURL, discovery.WithToken(*token), discovery.WithName(*name))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -40,6 +44,7 @@ func main() {
 	reg, err := d.Register(ctx, discovery.Registration{
 		Service: *name,
 		Address: *addr,
+		Version: *version,
 		Interfaces: []discovery.Interface{
 			{Name: "WEB", Protocol: "http", Port: *port, HealthURL: "/healthz"},
 		},
@@ -66,7 +71,7 @@ func main() {
 	}()
 
 	if *peer != "" {
-		go callPeer(ctx, d, *peer)
+		go callPeer(ctx, d, *peer, *peerVer)
 	}
 
 	stop := make(chan os.Signal, 1)
@@ -75,8 +80,15 @@ func main() {
 	log.Print("shutting down")
 }
 
-func callPeer(ctx context.Context, d *discovery.Client, peer string) {
-	res, err := d.NewResolver(ctx, peer, discovery.RoundRobin)
+func callPeer(ctx context.Context, d *discovery.Client, peer, constraint string) {
+	// A version-constrained resolver only ever returns instances matching the
+	// constraint; the filter is re-applied on every refresh as the fleet rolls.
+	var opts []discovery.ResolverOption
+	if constraint != "" {
+		opts = append(opts, discovery.WithVersion(constraint))
+		log.Printf("resolving %s with version %s", peer, constraint)
+	}
+	res, err := d.NewResolver(ctx, peer, discovery.RoundRobin, opts...)
 	if err != nil {
 		log.Printf("resolver(%s): %v", peer, err)
 		return

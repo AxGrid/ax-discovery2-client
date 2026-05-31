@@ -22,13 +22,15 @@ import (
 ctx := context.Background()
 
 // Multiple endpoints → automatic failover on network errors.
+// WithName makes this client show up by name in the server dashboard.
 d := discovery.New("http://disc1:8500,http://disc2:8500",
-    discovery.WithToken("write-token"))
+    discovery.WithToken("write-token"), discovery.WithName("billing"))
 
-// Register self.
+// Register self, advertising a version.
 reg, err := d.Register(ctx, discovery.Registration{
     Service: "billing",
     Address: "10.0.0.5",
+    Version: "2.4.0",
     Interfaces: []discovery.Interface{
         {Name: "WEB",  Protocol: "http", Port: 8080, HealthURL: "/healthz"},
         {Name: "GRPC", Protocol: "tcp",  Port: 9000},
@@ -39,13 +41,21 @@ reg, err := d.Register(ctx, discovery.Registration{
 if err != nil { panic(err) }
 defer reg.Close()  // deregister on shutdown
 
-// Resolve an upstream service.
-res, err := d.NewResolver(ctx, "payments", discovery.RoundRobin)
+// Resolve an upstream service, constrained to a version range.
+res, err := d.NewResolver(ctx, "payments", discovery.RoundRobin,
+    discovery.WithVersion(">=2.1.0"))
 if err != nil { panic(err) }
 defer res.Close()
 
 addr, _ := res.PickAddress("WEB")  // "10.0.0.5:8080"
 url,  _ := res.PickURL("WEB")      // "http://10.0.0.5:8080/"
+
+// Or let the server pick one instance, sticky by a token (same token → same
+// instance until it idles out; re-binds if it dies).
+pick, _ := d.Pick(ctx, "payments", discovery.PickOptions{
+    Version: ">=2.1.0", Iface: "WEB", Token: sessionID,
+})
+// pick.Address, pick.URL, pick.Instance, pick.Rebound
 ```
 
 ## API
@@ -61,6 +71,7 @@ d := discovery.New(baseURLs string, opts ...Option)
 Options:
 
 - `WithToken(t string)` — bearer token sent on every request.
+- `WithName(name string)` — identifies this client (`X-Discovery-Client` header); shows up in the server dashboard's request feed and client map.
 - `WithHTTPClient(*http.Client)` — override timeouts / transport.
 
 ### Self-registration
@@ -105,7 +116,20 @@ url,  _ := res.PickURL("WEB")        // full URL incl. scheme + path
 all     := res.Instances()           // snapshot of currently healthy instances
 ```
 
-Strategies: `RoundRobin`, `Random`, `Weighted`. The resolver subscribes via WebSocket and falls back to a 30s poll if the connection drops.
+Strategies: `RoundRobin`, `Random`, `Weighted`. The resolver subscribes via WebSocket and falls back to a 30s poll if the connection drops. Pass `WithVersion(constraint)` to restrict the cache to a semver range — re-applied on every refresh, so rolling deploys are reflected live.
+
+### Version-aware discovery & sticky pick
+
+```go
+// Constraint-filtered instances (npm-style: >=2.1.0, ^2.1, ~2.1.0, 1.x, 1.2.0 - 1.3.5).
+d.DiscoverVersion(ctx, "billing", ">=2.1.0")          // []Instance
+d.DiscoverAddresses(ctx, "billing", ">=2.1.0", "WEB") // ["10.0.0.5:8080", ...]
+
+// Server-side single pick; Token enables sticky (persisted, cluster-wide) balancing.
+d.Pick(ctx, "billing", discovery.PickOptions{Version: "^2.1.0", Iface: "WEB", Token: sessionID})
+```
+
+Instances with an empty or non-semver `Version` are excluded when a constraint is supplied.
 
 ### Lower-level operations
 

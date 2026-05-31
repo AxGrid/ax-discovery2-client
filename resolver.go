@@ -28,6 +28,7 @@ type Resolver struct {
 	c        *Client
 	service  string
 	strategy Strategy
+	version  string // optional semver constraint applied server-side
 
 	mu        sync.RWMutex
 	instances []Instance
@@ -37,9 +38,20 @@ type Resolver struct {
 	closed chan struct{}
 }
 
+// ResolverOption configures a Resolver at construction time.
+type ResolverOption func(*Resolver)
+
+// WithVersion constrains the resolver to instances satisfying an npm-style
+// semver expression (e.g. ">=2.1.0", "^2.1", "1.x"). The filter is applied
+// server-side on every refresh, so version rollouts are reflected live.
+func WithVersion(constraint string) ResolverOption {
+	return func(r *Resolver) { r.version = constraint }
+}
+
 // NewResolver opens a resolver for the named service. The current instance set
-// is fetched immediately, and subsequent changes are picked up in the background.
-func (c *Client) NewResolver(ctx context.Context, service string, strategy Strategy) (*Resolver, error) {
+// is fetched immediately, and subsequent changes are picked up in the
+// background. Pass WithVersion(...) to filter by a semver constraint.
+func (c *Client) NewResolver(ctx context.Context, service string, strategy Strategy, opts ...ResolverOption) (*Resolver, error) {
 	rctx, cancel := context.WithCancel(context.Background())
 	r := &Resolver{
 		c:        c,
@@ -47,6 +59,9 @@ func (c *Client) NewResolver(ctx context.Context, service string, strategy Strat
 		strategy: strategy,
 		stop:     cancel,
 		closed:   make(chan struct{}),
+	}
+	for _, opt := range opts {
+		opt(r)
 	}
 	if err := r.refresh(ctx); err != nil {
 		cancel()
@@ -147,7 +162,7 @@ func (r *Resolver) PickURL(iface string) (string, error) {
 }
 
 func (r *Resolver) refresh(ctx context.Context) error {
-	insts, err := r.c.Discover(ctx, r.service)
+	insts, err := r.c.DiscoverVersion(ctx, r.service, r.version)
 	if err != nil {
 		return err
 	}

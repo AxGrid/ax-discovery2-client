@@ -40,6 +40,7 @@ import (
 type Client struct {
 	endpoints []string
 	token     string
+	name      string
 	hc        *http.Client
 }
 
@@ -48,6 +49,12 @@ type Option func(*Client)
 
 // WithToken sets the bearer token sent on every request.
 func WithToken(t string) Option { return func(c *Client) { c.token = t } }
+
+// WithName identifies this client to the discovery server. The name is sent as
+// the X-Discovery-Client header on every request and surfaces in the server's
+// dashboard ("which client asked for which service / got which instance") and
+// request feed. Recommended: your service name, optionally with an instance id.
+func WithName(name string) Option { return func(c *Client) { c.name = name } }
 
 // WithHTTPClient overrides the underlying http.Client (timeouts, transport, etc).
 func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.hc = h } }
@@ -100,6 +107,9 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 		}
 		if c.token != "" {
 			req.Header.Set("Authorization", "Bearer "+c.token)
+		}
+		if c.name != "" {
+			req.Header.Set("X-Discovery-Client", c.name)
 		}
 		if raw != nil {
 			req.Header.Set("Content-Type", "application/json")
@@ -278,12 +288,93 @@ func (c *Client) ListInstances(ctx context.Context, service string) ([]Instance,
 
 // Discover returns only "up" instances of the named service.
 func (c *Client) Discover(ctx context.Context, service string) ([]Instance, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/v1/discover/"+url.PathEscape(service), nil)
+	return c.DiscoverVersion(ctx, service, "")
+}
+
+// DiscoverVersion returns the "up" instances of a service that satisfy an
+// npm-style semver constraint (e.g. ">=2.1.0", "^2.1", "~2.1.0", "1.x",
+// "1.2.0 - 1.3.5"). An empty constraint means "any version". Instances with an
+// empty or non-semver Version are excluded when a constraint is supplied.
+func (c *Client) DiscoverVersion(ctx context.Context, service, constraint string) ([]Instance, error) {
+	path := "/v1/discover/" + url.PathEscape(service)
+	if constraint != "" {
+		path += "?version=" + url.QueryEscape(constraint)
+	}
+	resp, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
 	var out []Instance
 	return out, decodeJSON(resp, &out)
+}
+
+// DiscoverAddresses returns a flat ["host:port", …] list of the matching "up"
+// instances. iface selects which interface's port to use ("" = the bare
+// Address); constraint applies the same semver filter as DiscoverVersion.
+func (c *Client) DiscoverAddresses(ctx context.Context, service, constraint, iface string) ([]string, error) {
+	q := url.Values{"format": {"addr"}}
+	if constraint != "" {
+		q.Set("version", constraint)
+	}
+	if iface != "" {
+		q.Set("iface", iface)
+	}
+	resp, err := c.do(ctx, http.MethodGet, "/v1/discover/"+url.PathEscape(service)+"?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	return out, decodeJSON(resp, &out)
+}
+
+// PickOptions tune a single server-side instance selection.
+type PickOptions struct {
+	// Version is an optional npm-style semver constraint (e.g. ">=2.1.0").
+	Version string
+	// Iface selects which interface to resolve into Address/URL on the result.
+	Iface string
+	// Token enables sticky balancing: repeated picks with the same token keep
+	// landing on the same instance until it idles past the server's affinity
+	// TTL. If that instance goes away/down/blocked the server re-binds to a
+	// healthy one (PickResult.Rebound is then true). The binding is persisted
+	// and replicated across the cluster. Empty token = stateless weighted pick.
+	Token string
+}
+
+// PickResult is the chosen instance plus a ready-to-use address/url.
+type PickResult struct {
+	Address  string    `json:"address"`
+	URL      string    `json:"url,omitempty"`
+	Sticky   bool      `json:"sticky,omitempty"`
+	Rebound  bool      `json:"rebound,omitempty"`
+	Instance *Instance `json:"instance"`
+}
+
+// Pick asks the server to select one healthy instance of a service. This is the
+// server-side counterpart to Resolver.Pick — useful when you want sticky
+// (token-based) balancing or a server-resolved address without maintaining a
+// long-lived Resolver. Returns an error if no healthy instance matches.
+func (c *Client) Pick(ctx context.Context, service string, opts PickOptions) (*PickResult, error) {
+	q := url.Values{}
+	if opts.Version != "" {
+		q.Set("version", opts.Version)
+	}
+	if opts.Iface != "" {
+		q.Set("iface", opts.Iface)
+	}
+	if opts.Token != "" {
+		q.Set("token", opts.Token)
+	}
+	path := "/v1/discover/" + url.PathEscape(service) + "/pick"
+	if enc := q.Encode(); enc != "" {
+		path += "?" + enc
+	}
+	resp, err := c.do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out PickResult
+	return &out, decodeJSON(resp, &out)
 }
 
 func (c *Client) DeleteInstance(ctx context.Context, service, id string) error {
@@ -318,6 +409,7 @@ type Registration struct {
 	Service    string            // required
 	ID         string            // optional; UUID generated if empty
 	Address    string            // required: host or IP that callers will use to reach this instance
+	Version    string            // optional released version, e.g. "2.1.0"; enables semver-constraint discovery
 	Interfaces []Interface       // ports and protocols this instance exposes
 	Weight     int               // for weighted balancing; defaults to 1
 	Status     Status            // defaults to "up"
@@ -392,6 +484,7 @@ func (c *Client) Register(ctx context.Context, reg Registration) (*Registered, e
 		ID:               reg.ID,
 		ServiceName:      reg.Service,
 		Address:          reg.Address,
+		Version:          reg.Version,
 		Interfaces:       reg.Interfaces,
 		Weight:           reg.Weight,
 		Status:           reg.Status,
