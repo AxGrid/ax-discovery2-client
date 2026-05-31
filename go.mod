@@ -1,4 +1,4 @@
-module github.com/axgrid/discovery2-client
+module github.com/axgrid/ax-discovery2-client
 
 go 1.23
 

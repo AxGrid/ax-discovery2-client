@@ -5,7 +5,7 @@ whole team shares one version-controlled source of truth.
 
 ## `ax-discovery2-client`
 
-Wires `github.com/axgrid/discovery2-client` into a Go project — registration
+Wires `github.com/axgrid/ax-discovery2-client` into a Go project — registration
 (with version), version-constrained & sticky balancing, and the config store.
 
 To use it locally, make it visible to Claude Code one of these ways:
@@ -21,5 +21,7 @@ cp -r skills/ax-discovery2-client ~/.claude/skills/
 Then trigger it in Claude Code (e.g. "подключи discovery", "add ax-discovery
 client", "read config from discovery").
 
-Keep `skills/ax-discovery2-client/SKILL.md` in sync with the canonical copy at
-`~/.claude/skills/ax-discovery2-client/SKILL.md` when either changes.
+`skills/ax-discovery2-client/SKILL.md` is the single source of truth in this
+repo; `.claude/skills/ax-discovery2-client/SKILL.md` is a symlink to it (so
+Claude Code auto-discovers it when working inside this repo). When you edit the
+skill, also refresh your per-developer copy under `~/.claude/skills/`.

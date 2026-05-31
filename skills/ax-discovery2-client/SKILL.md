@@ -1,17 +1,18 @@
 ---
 name: ax-discovery2-client
-description: Use this skill when the user wants to integrate the github.com/axgrid/discovery2-client library into a Go project — to register the current service with a discovery2 server (with a semver version), find/balance other services (incl. version-constrained and sticky/token balancing), and/or read & write the discovery2 config store (typed variables, scoped global/service/version). Triggers on phrases like "add ax-discovery client", "ax-discovery2-client", "axgrid discovery", "register service in discovery", "подключи discovery", "добавь discovery2 клиент", "зарегистрируй сервис в discovery", "найди сервис через discovery", "балансировка через discovery", "service discovery in Go", "publish to discovery", "подключи к ax-discovery", "use discovery2-client", "read config from discovery", "discovery config variables", "конфиг из discovery", "переменные из discovery", "версия сервиса в discovery", "sticky balancing discovery", "discover by version".
+description: Use this skill when the user wants to integrate the github.com/axgrid/ax-discovery2-client library into a Go project — to register the current service with a discovery2 server (with a semver version), find/balance other services (incl. version-constrained and sticky/token balancing), and/or read & write the discovery2 config store (typed variables, scoped global/service/version). Triggers on phrases like "add ax-discovery client", "ax-discovery2-client", "axgrid discovery", "register service in discovery", "подключи discovery", "добавь discovery2 клиент", "зарегистрируй сервис в discovery", "найди сервис через discovery", "балансировка через discovery", "service discovery in Go", "publish to discovery", "подключи к ax-discovery", "use discovery2-client", "read config from discovery", "discovery config variables", "конфиг из discovery", "переменные из discovery", "версия сервиса в discovery", "sticky balancing discovery", "discover by version".
 version: 2.1.0
 ---
 
 # ax-discovery2-client integration skill
 
-> **Go import path:** `github.com/axgrid/discovery2-client` (canonical, per the
-> library's `go.mod` — use this in `import` and `go get`).
+> **Go import path:** `github.com/axgrid/ax-discovery2-client` (per the library's
+> `go.mod` — use this in `import` and `go get`).
 > **Source repository:** <https://github.com/AxGrid/ax-discovery2-client>
-> The repo name and the module path differ; always import the module path above.
+> (Owner casing differs from the import path — GitHub resolves it; always import
+> the lowercase path above.)
 
-Wires **github.com/axgrid/discovery2-client** into a user's Go project.
+Wires **github.com/axgrid/ax-discovery2-client** into a user's Go project.
 The library does three things — pick the ones the user actually needs:
 
 1. **Self-registration** — this app announces itself to discovery2 (with a
@@ -141,13 +142,13 @@ multiSelect: false
 Always:
 
 ```bash
-go get github.com/axgrid/discovery2-client@latest
+go get github.com/axgrid/ax-discovery2-client@latest
 ```
 
 Always import as:
 
 ```go
-import discovery "github.com/axgrid/discovery2-client"
+import discovery "github.com/axgrid/ax-discovery2-client"
 ```
 
 The package name is `discovery`. The `discovery` alias is conventional and
@@ -167,7 +168,7 @@ import (
     "log"
     "os"
 
-    discovery "github.com/axgrid/discovery2-client"
+    discovery "github.com/axgrid/ax-discovery2-client"
 )
 
 func registerSelf(ctx context.Context) (*discovery.Client, *discovery.Registered, error) {

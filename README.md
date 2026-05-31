@@ -3,7 +3,7 @@
 Go client library for [discovery2](https://github.com/axgrid/discovery2) — a small service-discovery service.
 
 ```bash
-go get github.com/axgrid/discovery2-client
+go get github.com/axgrid/ax-discovery2-client
 ```
 
 ## Two things this gives you
@@ -16,7 +16,7 @@ go get github.com/axgrid/discovery2-client
 ```go
 import (
     "context"
-    discovery "github.com/axgrid/discovery2-client"
+    discovery "github.com/axgrid/ax-discovery2-client"
 )
 
 ctx := context.Background()

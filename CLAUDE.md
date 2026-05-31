@@ -11,17 +11,17 @@ server lives at `../discovery2` (locally) / `github.com/axgrid/discovery2`.
 
 ## Module shape
 
-Single-package module. Import path: `github.com/axgrid/discovery2-client`.
+Single-package module. Import path: `github.com/axgrid/ax-discovery2-client`.
 Package name: `discovery`. Conventional alias:
 
 ```go
-import discovery "github.com/axgrid/discovery2-client"
+import discovery "github.com/axgrid/ax-discovery2-client"
 ```
 
 Files:
 
 ```
-go.mod                # module github.com/axgrid/discovery2-client; go 1.23
+go.mod                # module github.com/axgrid/ax-discovery2-client; go 1.23
 types.go              # Service, Instance, Interface, Status, Event + constants
 client.go             # Client, Option (WithToken/WithName/WithHTTPClient), CRUD/Discover/Heartbeat,
                       # DiscoverVersion/DiscoverAddresses/Pick (semver + sticky),
@@ -219,7 +219,7 @@ side-effect-free; they should mutate the `*Client` and nothing else.
 ## Releasing
 
 1. Tag with semver: `git tag v0.X.0 && git push origin v0.X.0`.
-2. Test consumers can `go get github.com/axgrid/discovery2-client@v0.X.0`.
+2. Test consumers can `go get github.com/axgrid/ax-discovery2-client@v0.X.0`.
 3. Update the version mention in the `/ax-discovery2-client` skill if the
    skill recommends pinning a version.
 

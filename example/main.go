@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	discovery "github.com/axgrid/discovery2-client"
+	discovery "github.com/axgrid/ax-discovery2-client"
 )
 
 func main() {
